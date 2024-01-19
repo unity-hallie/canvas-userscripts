@@ -128,8 +128,9 @@ defer(function() {
 
                     if (!('rubric_settings' in assignment)) {
                         popUp(`ERROR: No rubric settings found at for ${assignment.name}<br/><br/> `
-                            + 'This is likely due to a Canvas bug where a rubric has entered a "soft-deleted" state. '
-                            + 'Please use the <a href="https://community.canvaslms.com/t5/Canvas-Admin-Blog/Undeleting-things-in-Canvas/ba-p/267116">Undelete feature</a> '
+                            + 'Either the assignment does not have an attached rubric or '
+                            + 'this is due to a Canvas bug where a rubric has entered a "soft-deleted" state. '
+                            + 'If the latter, please use the <a href="https://community.canvaslms.com/t5/Canvas-Admin-Blog/Undeleting-things-in-Canvas/ba-p/267116">Undelete feature</a> '
                             + 'to restore the rubric associated with this assignment or contact Canvas Support.');
 
                     }
@@ -142,7 +143,7 @@ defer(function() {
                     const hidePoints = assignment.rubric_settings.hide_points;
                     const hideRatings = assignment.rubric_settings.free_form_criterion_comments;
                     if (hidePoints && hideRatings) {
-                        popUp("ERROR: This rubric is configured to use free-form comments instead of ratings AND to hide points, so there is nothing to export!");
+                        popUp(`ERROR: ${assignment.name} is configured to use free-form comments instead of ratings AND to hide points, so there is nothing to export!`);
                         continue;
                     }
 
