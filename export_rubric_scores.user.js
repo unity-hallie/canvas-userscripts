@@ -5,12 +5,12 @@
 // @match        https://*/courses/*/gradebook/speed_grader?*
 // @grant        none
 // @run-at       document-idle
-// @version      0.2
+// @version      0.3
 // ==/UserScript==
 
 /* globals $ */
-
 // wait until the window jQuery is loaded
+const debug = false
 function defer(method) {
     if (typeof $ !== 'undefined') {
         method();
@@ -31,8 +31,9 @@ function waitForElement(selector, callback) {
 }
 
 function popUp(text) {
-    $("#export_rubric_dialog").html(`<p>${text}</p>`);
-    $("#export_rubric_dialog").dialog({ buttons: {} });
+    let el = $("#export_rubric_dialog");
+    el.html(`<p>${text}</p>`);
+    el.dialog({ buttons: {} });
 }
 
 function popClose() {
@@ -41,20 +42,17 @@ function popClose() {
 
 async function getAllPagesAsync(url) {
     let out = await getRemainingPagesAsync(url, []);
-    console.log("Get All Pages", out);
     return out;
 }
 
 async function getRemainingPagesAsync(url, listSoFar) {
     let response = await fetch(url);
     let responseList = await response.json();
-console.log(response);
     let headers = response.headers;
 
     let nextLink;
     if(headers.has('link')){
         let linkStr = headers.get('link');
-        console.log("LinkStr", linkStr);
         let links = linkStr.split(',');
         nextLink = null;
         for(let link of links){
@@ -63,18 +61,17 @@ console.log(response);
             }
         }
     }
-    if(nextLink == null){
-        console.log('listSoFar1', listSoFar)
+    if(nextLink == null || debug){
         return listSoFar.concat(responseList);
     } else {
         listSoFar = await getRemainingPagesAsync(nextLink, listSoFar);
-        console.log("listSoFar2", listSoFar);
         return listSoFar;
     }
 }
 
 // escape commas and quotes for CSV formatting
 function csvEncode(string) {
+    string = String(string);
     if(string) {
         string = string.replace(/(")/g,'"$1');
         string = string.replace(/\s*\n\s*/g,' ');
@@ -86,6 +83,153 @@ function showError(event) {
     popUp(event.message);
     window.removeEventListener("error", showError);
 }
+
+/**
+ *
+ * @param {object} course
+ * @param {object} enrollment
+ * @param {array} modules
+ * @param {array} quizzes
+ * @param {array} userSubmissions
+ * @param {object} term
+ * @returns {Promise<string[]>}
+ */
+async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSubmissions,
+                                     rubrics, term }){
+    let { user } = enrollment;
+    let submissions = userSubmissions.filter(a => a.user_id === user.id);
+    let skip = false;
+    let hide_points, free_form_criterion_comments = false
+    const out = [];
+
+
+
+    for (let submission of submissions) {
+        let { assignment } = submission;
+        let { rubric } = assignment;
+        if (!('rubric_settings' in assignment)) {
+            skip = true;
+
+        }
+
+        if(!assignment.rubric_settings) {
+            skip = true;
+        } else {
+            let rs = assignment.rubric_settings;
+            hide_points = rs.hide_points;
+            free_form_criterion_comments = rs.free_form_criterion_comments;
+            if (hide_points && free_form_criterion_comments) {
+                popUp(`ERROR: ${assignment.name} is configured to use free-form comments instead of ratings AND to hide points`
+                    +`, so there is nothing to export!`);
+                skip = true;
+            }
+        }
+
+        // Fill out the csv header and map criterion ids to sort index
+        // Also create an object that maps criterion ids to an object mapping rating ids to descriptions
+        let critOrder = {};
+        let critRatingDescs = {};
+        for (let critIndex in rubric){
+            let criterion = rubric[critIndex];
+            critOrder[criterion.id] = critIndex;
+            critRatingDescs[criterion.id] = {};
+            for(let rating of criterion.ratings) {
+                critRatingDescs[criterion.id][rating.id] = rating.description;
+            }
+        }
+
+        // Iterate through submissions
+        for (let submission of submissions) {
+            const {assignment} = submission;
+            const {user} = enrollment;
+            const {course_code} = course;
+            let section = course_code.match(/-\s*(\d+)$/);
+            if (section) {
+                section = section[1];
+            }
+            console.log(JSON.stringify(term));
+            course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
+            let baseEntry = {
+                assignmentTotalScore: submission.score,
+                assignmentType: assignment.submission_types,
+                assignmentNumber: assignment.title,
+                assignmentId: assignment.id,
+                attemptNumber: submission.attempt,
+                courseCode: course["course_code"],
+                rubricLineMaxScore: null,
+                rubricLineNumber: null,
+                rubricLineScore: null,
+                section: section,
+                studentId: user.sis_user_id,
+                studentName: user.name,
+                term: term,
+                weekNumber: null,
+            }
+
+            if (user) {
+                // Add criteria scores and ratings
+                // Need to turn rubric_assessment object into an array
+                let crits = []
+                let critIds = []
+                let { rubric_assessment } = submission;
+                if (rubric_assessment == null) {
+
+                } else {
+                    for (let critKey in rubric_assessment) {
+                        let critValue = rubric_assessment[critKey];
+                        if (free_form_criterion_comments) {
+                            crits.push({'id': critKey, 'points': critValue.points, 'rating': null});
+                        } else {
+                            let crit = {
+                                'id': critKey,
+                                'points': critValue.points,
+                            }
+                            if(critValue.rating_id) {
+                                crits.rating = critRatingDescs[critKey][critValue.rating_id]
+                            }
+                        }
+                        critIds.push(critKey);
+                    }
+                }
+                // Check for any criteria entries that might be missing; set them to null
+                for (let critKey in critOrder) {
+                    if (!critIds.includes(critKey)) {
+                        crits.push({'id': critKey, 'points': null, 'rating': null});
+                    }
+                }
+                // Sort into same order as column order
+                crits.sort(function (a, b) {
+                    return critOrder[a.id] - critOrder[b.id];
+                });
+
+                for(let critIndex in crits) {
+                    let criterion = crits[critIndex];
+                    let { rubric_settings } = assignment;
+                    let rubricLine = critIndex;
+                    let rubricName = rubric_settings ? rubric_settings.title : null;
+                    let assignmentNumber = 0;
+                    let weekNumber = 0;
+                    let row = [
+                        baseEntry.term.name, baseEntry.courseCode, baseEntry.section, baseEntry.studentName,
+                        baseEntry.studentId, baseEntry.weekNumber, baseEntry.assignmentType,
+                        assignmentNumber, baseEntry.assignmentId, rubricName,
+                        rubricLine, criterion.points, rubric.id,
+                        criterion.rating, JSON.stringify(criterion)
+                    ];
+
+                    row = row.map( item => csvEncode(item));
+                    let row_string = row.join(',') + '\n';
+                    out.push(row_string);
+                }
+            }
+        }
+
+    }
+    console.log(out);
+    return out;
+
+}
+
 
 defer(function() {
     'use strict';
@@ -113,116 +257,50 @@ defer(function() {
                 popUp("Exporting scores, please wait...");
                 window.addEventListener("error", showError);
 
-                // Get some initial data from the current URL
-                const courseId = window.location.href.split('/')[4];
+               // Get some initial data from the current URL
                 const urlParams = window.location.href.split('?')[1].split('&');
-                const assignId = urlParams.find(i => i.split('=')[0] === "assignment_id").split('=')[1];
+                const courseId = window.location.href.split('/')[4];
+
+                let courseResponse = await fetch(`/api/v1/courses/${courseId}?include=term`)
+                let course = await courseResponse.json()
 
                 let assignments = await getAllPagesAsync(`/api/v1/courses/${courseId}/assignments?per_page=100`);
-                //let user_submissions = await getAllPagesAsync(`/api/v1/courses/${courseId}/students/submissions?per_page=100&include[]=user&include=rubric_assessment&group=True`);
-                //let quizzes = await getAllPagesAsync(`/api/v1/courses/${courseId}/quizzes`)
+                let userSubmissions = await getAllPagesAsync(`/api/v1/courses/${courseId}/students/submissions?student_ids=all&per_page=100&include[]=rubric_assessment&include[]=assignment&group=True`);
+                //let quizzes = await getAllPagesAsync(`/api/v1/courses/${courseId}/quizzes`);
 
-                for(let assignment of assignments) {
-                    let submissions = await getAllPagesAsync(`/api/v1/courses/${courseId}/assignments/${assignment.id}/submissions?include[]=rubric_assessment&per_page=100`);
-                    let enrollments = await getAllPagesAsync(`/api/v1/courses/${courseId}/enrollments?per_page=100`);
+                let account = await getAllPagesAsync(`/api/v1/accounts/${course.account_id}`);
+                let rootAccountId = account.root_account_id;
+                let enrollments = await getAllPagesAsync(`/api/v1/courses/${courseId}/enrollments?per_page=100`);
+                let modules = await getAllPagesAsync(`/api/v1/courses/${courseId}/modules`);
 
-                    if (!('rubric_settings' in assignment)) {
-                        popUp(`ERROR: No rubric settings found at for ${assignment.name}<br/><br/> `
-                            + 'Either the assignment does not have an attached rubric or '
-                            + 'this is due to a Canvas bug where a rubric has entered a "soft-deleted" state. '
-                            + 'If the latter, please use the <a href="https://community.canvaslms.com/t5/Canvas-Admin-Blog/Undeleting-things-in-Canvas/ba-p/267116">Undelete feature</a> '
-                            + 'to restore the rubric associated with this assignment or contact Canvas Support.');
+                let termResponse = await fetch(`/api/v1/accounts/${rootAccountId}/terms/${course.enrollment_term_id}`)
+                let term = await termResponse.json()
 
-                    }
-                    // If rubric is set to hide points, then also hide points in export
-                    // If rubric is set to use free form comments, then also hide ratings in export
-                    if(!assignment.rubric_settings) {
-                        continue;//skip assignments that dont have rubric settings for now
-                    }
-                    
-                    const hidePoints = assignment.rubric_settings.hide_points;
-                    const hideRatings = assignment.rubric_settings.free_form_criterion_comments;
-                    if (hidePoints && hideRatings) {
-                        popUp(`ERROR: ${assignment.name} is configured to use free-form comments instead of ratings AND to hide points, so there is nothing to export!`);
-                        continue;
-                    }
+                let rubrics = await getAllPagesAsync(`/api/v1/courses/${courseId}/rubrics?per_page=100`);
 
-                    // Fill out the csv header and map criterion ids to sort index
-                    // Also create an object that maps criterion ids to an object mapping rating ids to descriptions
-                    var critOrder = {};
-                    var critRatingDescs = {};
-                    var header = "Student Name,Student ID,Posted Score,Attempt Number";
-                    $.each(assignment.rubric, function (critIndex, criterion) {
-                        critOrder[criterion.id] = critIndex;
-                        if (!hideRatings) {
-                            critRatingDescs[criterion.id] = {};
-                            $.each(criterion.ratings, function (i, rating) {
-                                critRatingDescs[criterion.id][rating.id] = rating.description;
-                            });
-                            header += ',' + csvEncode('Rating: ' + criterion.description);
-                        }
-                        if (!hidePoints) {
-                            header += ',' + csvEncode('Points: ' + criterion.description);
-                        }
+                let header = [
+                    'Term','Class','Section','Student Name','Student Id',
+                    'Week Number', 'Assignment Type','Assignment Number',
+                    'Rubric Line','Line Score','Line Max Score', 'X', 'Y', 'Z'
+                ].join(',');
+
+                header += '\n';
+                let csvRows = [header];
+                for(let enrollment of enrollments) {
+                    let out_rows = await getEnrollmentRows({
+                        enrollment, modules, assignments, userSubmissions, term, rubrics, course,
                     });
-                    header += '\n';
-
-                    // Iterate through submissions
-                    let csvRows = [header];
-                    $.each(submissions, function (subIndex, submission) {
-                        const user = enrollments.find(i => i.user_id === submission.user_id).user;
-                        if (user) {
-                            var row = `${user.name},${user.sis_user_id},${submission.score},${submission.attempt}`;
-                            // Add criteria scores and ratings
-                            // Need to turn rubric_assessment object into an array
-                            var crits = []
-                            var critIds = []
-                            if (submission.rubric_assessment != null) {
-                                console.log(submission.rubric_assessment);
-                                $.each(submission.rubric_assessment, function (critKey, critValue) {
-                                    if (hideRatings) {
-                                        crits.push({'id': critKey, 'points': critValue.points, 'rating': null});
-                                    } else {
-                                        crits.push({
-                                            'id': critKey,
-                                            'points': critValue.points,
-                                            'rating': critRatingDescs[critKey][critValue.rating_id]
-                                        });
-                                    }
-                                    critIds.push(critKey);
-                                });
-                            }
-                            // Check for any criteria entries that might be missing; set them to null
-                            $.each(critOrder, function (critKey, critValue) {
-                                if (!critIds.includes(critKey)) {
-                                    crits.push({'id': critKey, 'points': null, 'rating': null});
-                                }
-                            });
-                            // Sort into same order as column order
-                            crits.sort(function (a, b) {
-                                return critOrder[a.id] - critOrder[b.id];
-                            });
-                            $.each(crits, function (critIndex, criterion) {
-                                if (!hideRatings) {
-                                    row += `,${csvEncode(criterion.rating)}`;
-                                }
-                                if (!hidePoints) {
-                                    row += `,${criterion.points}`;
-                                }
-                            });
-                            row += '\n';
-                            csvRows.push(row);
-                        }
-                    });
-                    popClose();
-                    saveText(csvRows, `Rubric Scores ${assignment.name.replace(/[^a-zA-Z 0-9]+/g, '')}.csv`);
-                    window.removeEventListener("error", showError);
+                    csvRows = csvRows.concat(out_rows);
                 }
+                popClose();
+                console.log(csvRows);
+                saveText(csvRows, `Rubric Scores ${course.course_code.replace(/[^a-zA-Z 0-9]+/g, '')}.csv`);
+                window.removeEventListener("error", showError);
             } catch(e) {
                 popClose();
                 popUp(`ERROR ${e} while retrieving assignment data from Canvas. Please refresh and try again.`, null);
-                throw(e);
                 window.removeEventListener("error", showError);
+                throw(e);
             }
         });
     }
