@@ -11,6 +11,13 @@
 /* globals $ */
 // wait until the window jQuery is loaded
 const debug = false
+let header = [
+    'Term','Class','Section','Student Name','Student Id',
+    'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id',
+    'Rubric Name', 'Rubric Id', 'Rubric Line','Line Score','Line Max Score'
+].join(',');
+header += '\n';
+
 function defer(method) {
     if (typeof $ !== 'undefined') {
         method();
@@ -84,6 +91,12 @@ function showError(event) {
     window.removeEventListener("error", showError);
 }
 
+/*
+function populateWeekAndAssignment(assignment, module) {
+    module = modules.filter(module => )
+}
+*/
+
 /**
  *
  * @param {object} course
@@ -152,7 +165,7 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
             let baseEntry = {
                 assignmentTotalScore: submission.score,
                 assignmentType: assignment.submission_types,
-                assignmentNumber: assignment.title,
+                assignmentNumber: getAssignmentNumber(assignment, modules),
                 assignmentId: assignment.id,
                 attemptNumber: submission.attempt,
                 courseCode: course["course_code"],
@@ -209,12 +222,19 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
                     let rubricName = rubric_settings ? rubric_settings.title : null;
                     let assignmentNumber = 0;
                     let weekNumber = 0;
+                    let rubricScore = criterion.points;
+
+//                     let header = [
+//     'Term','Class','Section','Student Name','Student Id',
+//     'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id',
+//     'Rubric Name', 'Rubric Line','Line Score','Line Max Score'
+// ].join(',');
                     let row = [
                         baseEntry.term.name, baseEntry.courseCode, baseEntry.section, baseEntry.studentName,
                         baseEntry.studentId, baseEntry.weekNumber, baseEntry.assignmentType,
-                        assignmentNumber, baseEntry.assignmentId, rubricName,
-                        rubricLine, criterion.points, rubric.id,
-                        criterion.rating, JSON.stringify(criterion)
+                        assignmentNumber, baseEntry.assignmentId, assignment.title, rubricName, rubric.id,
+                        rubricLine, rubricScore, rubric.points_possible,
+                         JSON.stringify(term)
                     ];
 
                     row = row.map( item => csvEncode(item));
@@ -268,23 +288,19 @@ defer(function() {
                 let userSubmissions = await getAllPagesAsync(`/api/v1/courses/${courseId}/students/submissions?student_ids=all&per_page=100&include[]=rubric_assessment&include[]=assignment&group=True`);
                 //let quizzes = await getAllPagesAsync(`/api/v1/courses/${courseId}/quizzes`);
 
-                let account = await getAllPagesAsync(`/api/v1/accounts/${course.account_id}`);
+                let accounts = await getAllPagesAsync(`/api/v1/accounts/${course.account_id}`);
+                let account = accounts[0];
+
                 let rootAccountId = account.root_account_id;
                 let enrollments = await getAllPagesAsync(`/api/v1/courses/${courseId}/enrollments?per_page=100`);
                 let modules = await getAllPagesAsync(`/api/v1/courses/${courseId}/modules`);
 
-                let termResponse = await fetch(`/api/v1/accounts/${rootAccountId}/terms/${course.enrollment_term_id}`)
-                let term = await termResponse.json()
+                let response = await fetch(`/api/v1/accounts/${rootAccountId}/terms/${course.enrollment_term_id}`);
+                let term = await response.json();
+
 
                 let rubrics = await getAllPagesAsync(`/api/v1/courses/${courseId}/rubrics?per_page=100`);
 
-                let header = [
-                    'Term','Class','Section','Student Name','Student Id',
-                    'Week Number', 'Assignment Type','Assignment Number',
-                    'Rubric Line','Line Score','Line Max Score', 'X', 'Y', 'Z'
-                ].join(',');
-
-                header += '\n';
                 let csvRows = [header];
                 for(let enrollment of enrollments) {
                     let out_rows = await getEnrollmentRows({
