@@ -91,11 +91,10 @@ function showError(event) {
     window.removeEventListener("error", showError);
 }
 
-/*
-function populateWeekAndAssignment(assignment, module) {
-    module = modules.filter(module => )
+
+function getWeekAndAssignmentNumber(assignment, modules) {
+    let module = modules.filter()
 }
-*/
 
 /**
  *
@@ -162,21 +161,22 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
             }
             console.log(JSON.stringify(term));
             course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
+            let { weekNumber, assignmentNumber } = getWeekAndAssignmentNumber(assignment, modules);
             let baseEntry = {
+                assignmentNumber,
+                weekNumber,
                 assignmentTotalScore: submission.score,
                 assignmentType: assignment.submission_types,
-                assignmentNumber: getAssignmentNumber(assignment, modules),
                 assignmentId: assignment.id,
                 attemptNumber: submission.attempt,
                 courseCode: course["course_code"],
                 rubricLineMaxScore: null,
                 rubricLineNumber: null,
                 rubricLineScore: null,
-                section: section,
+                section,
                 studentId: user.sis_user_id,
                 studentName: user.name,
                 term: term,
-                weekNumber: null,
             }
 
             if (user) {
