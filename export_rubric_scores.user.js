@@ -10,11 +10,11 @@
 
 /* globals $ */
 // wait until the window jQuery is loaded
-const debug = false
+const debug = false;
 let header = [
     'Term','Class','Section','Student Name','Student Id',
-    'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id',
-    'Rubric Name', 'Rubric Id', 'Rubric Line','Line Score','Line Max Score'
+    'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id', 'Assignment Title',
+    'Rubric Id', 'Rubric Name', 'Rubric Line','Line Score','Line Max Score'
 ].join(',');
 header += '\n';
 
@@ -48,8 +48,8 @@ function popClose() {
 }
 
 async function getAllPagesAsync(url) {
-    let out = await getRemainingPagesAsync(url, []);
-    return out;
+    return await getRemainingPagesAsync(url, []);
+
 }
 
 async function getRemainingPagesAsync(url, listSoFar) {
@@ -68,7 +68,7 @@ async function getRemainingPagesAsync(url, listSoFar) {
             }
         }
     }
-    if(nextLink == null || debug){
+    if(nextLink == null) {
         return listSoFar.concat(responseList);
     } else {
         listSoFar = await getRemainingPagesAsync(nextLink, listSoFar);
@@ -78,10 +78,12 @@ async function getRemainingPagesAsync(url, listSoFar) {
 
 // escape commas and quotes for CSV formatting
 function csvEncode(string) {
-    if (!string || string in ['undefined', 'null']) {
+
+    if (typeof(string) === 'undefined') {
         return '';
     }
     string = String(string);
+
     if(string) {
         string = string.replace(/(")/g,'"$1');
         string = string.replace(/\s*\n\s*/g,' ');
@@ -97,13 +99,14 @@ function showError(event) {
 function getItemInModule(contentItem, module) {
     let contentId = contentItem.id;
     let type= 'Assignment';
-    if( 'discussion_topic' in contentItem.submission_types) {
-        type = 'Discussion'
+    if( contentItem.hasOwnProperty('discussion_topic')) {
+        type = 'Discussion';
+        contentId = contentItem.discussion_topic.id
     }
-    if( 'Online Quiz' in contentItem.submission_types) {
-        type = 'Quiz'
+    if( 'online_quiz' in contentItem.submission_types) {
+        type = 'Quiz';
     }
-
+    console.log(type);
     let count = 1;
     for (let item of module.items){
         if (item.type !== type) {
@@ -138,8 +141,6 @@ function getModuleInfo(contentItem, modules) {
         if(!moduleItem) {
             continue;
         }
-        let numberInModule = moduleItem.numberInModule;
-        let type = moduleItem.type;
         return {
             weekNumber: weekNumber,
             type: moduleItem.type,
@@ -162,15 +163,25 @@ function getModuleInfo(contentItem, modules) {
 async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSubmissions,
                                      rubrics, term }){
     let { user } = enrollment;
-    let submissions = userSubmissions.filter(a => a.user_id === user.id);
-    let skip = false;
-    let hide_points, free_form_criterion_comments = false
-    const out = [];
+    let singleUserSubmissions = userSubmissions.filter(a => a.user_id === user.id);
 
+    //Lets not actually do this if we can't find the user's submissions.
+    if (singleUserSubmissions.length === 0) {
+        return [];
+    }
+    let submissions = singleUserSubmissions[0].submissions;
+    let skip = false;
+    let hide_points, free_form_criterion_comments = false;
+    const out = [];
 
 
     for (let submission of submissions) {
         let { assignment } = submission;
+        const {course_code} = course;
+        let section = course_code.match(/-\s*(\d+)$/);
+        if (section) {
+            section = section[1];
+        }
         let { rubric } = assignment;
         if (!('rubric_settings' in assignment)) {
             skip = true;
@@ -203,102 +214,78 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
             }
         }
 
-        // Iterate through submissions
-        for (let submission of submissions) {
-            const {assignment} = submission;
-            const {user} = enrollment;
-            const {course_code} = course;
-            let section = course_code.match(/-\s*(\d+)$/);
-            if (section) {
-                section = section[1];
-            }
-            console.log(JSON.stringify(term));
-            course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
-            let { weekNumber, numberInModule, type } = getModuleInfo(assignment, modules);
-            console.log("number in module", numberInModule);
-            let baseEntry = {
-                numberInModule,
-                weekNumber,
-                assignmentTotalScore: submission.score,
-                assignmentType: type,
-                assignmentId: assignment.id,
-                attemptNumber: submission.attempt,
-                courseCode: course["course_code"],
-                rubricLineMaxScore: null,
-                rubricLineNumber: null,
-                rubricLineScore: null,
-                section,
-                studentId: user.sis_user_id,
-                studentName: user.name,
-                term: term,
-            }
 
-            if (user) {
-                // Add criteria scores and ratings
-                // Need to turn rubric_assessment object into an array
-                let crits = []
-                let critIds = []
-                let { rubric_assessment } = submission;
-                if (rubric_assessment == null) {
+        course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
+        let { weekNumber, numberInModule, type } = getModuleInfo(assignment, modules);
+        console.log("number in module", numberInModule);
 
-                } else {
-                    for (let critKey in rubric_assessment) {
-                        let critValue = rubric_assessment[critKey];
-                        if (free_form_criterion_comments) {
-                            crits.push({'id': critKey, 'points': critValue.points, 'rating': null});
-                        } else {
-                            let crit = {
-                                'id': critKey,
-                                'points': critValue.points,
-                            }
-                            if(critValue.rating_id) {
-                                crits.rating = critRatingDescs[critKey][critValue.rating_id]
+        if (user) {
+            // Add criteria scores and ratings
+            // Need to turn rubric_assessment object into an array
+            let crits = []
+            let critIds = []
+            let { rubric_assessment } = submission;
+            if (rubric_assessment == null) {
+
+            } else {
+                for (let critKey in rubric_assessment) {
+                    let critValue = rubric_assessment[critKey];
+                    if (free_form_criterion_comments) {
+                        crits.push({'id': critKey, 'points': critValue.points, 'rating': null});
+                    } else {
+                        let crit = {
+                            'id': critKey,
+                            'points': critValue.points,
+                        }
+                        if(critValue.rating_id) {
+                            if(critKey in critRatingDescs) {
+                                crits.rating = critRatingDescs[critKey][critValue.rating_id];
+                            } else {
+                                console.log('critkey not found ', critKey, critRatingDescs)
                             }
                         }
-                        critIds.push(critKey);
                     }
+                    critIds.push(critKey);
                 }
-                // Check for any criteria entries that might be missing; set them to null
-                for (let critKey in critOrder) {
-                    if (!critIds.includes(critKey)) {
-                        crits.push({'id': critKey, 'points': null, 'rating': null});
-                    }
+            }
+            // Check for any criteria entries that might be missing; set them to null
+            for (let critKey in critOrder) {
+                if (!critIds.includes(critKey)) {
+                    crits.push({'id': critKey, 'points': null, 'rating': null});
                 }
-                // Sort into same order as column order
-                crits.sort(function (a, b) {
-                    return critOrder[a.id] - critOrder[b.id];
-                });
+            }
+            // Sort into same order as column order
+            crits.sort(function (a, b) {
+                return critOrder[a.id] - critOrder[b.id];
+            });
 
-                for(let critIndex in crits) {
-                    let criterion = crits[critIndex];
-                    let { rubric_settings } = assignment;
-                    let rubricLine = critIndex;
-                    let rubricName = rubric_settings ? rubric_settings.title : null;
+            for(let critIndex in crits) {
+                let criterion = crits[critIndex];
+                let { rubric_settings } = assignment;
+                let rubricLine = critIndex;
+                console.log(assignment);
+                let rubricName = rubric_settings ? rubric_settings.title : null;
+                let name = assignment.hasOwnProperty('name') ? assignment.name : assignment.title;
+                let rubricScore = criterion.points;
 
-                    let rubricScore = criterion.points;
-
-//                     let header = [
+// let header = [
 //     'Term','Class','Section','Student Name','Student Id',
 //     'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id',
-//     'Rubric Name', 'Rubric Line','Line Score','Line Max Score'
+//     'Rubric Name', 'Rubric Id', 'Rubric Line','Line Score','Line Max Score'
 // ].join(',');
-                    let row = [
-                        baseEntry.term.name, baseEntry.courseCode, baseEntry.section, baseEntry.studentName,
-                        baseEntry.studentId, baseEntry.weekNumber, baseEntry.assignmentType,
-                        baseEntry.numberInModule, baseEntry.assignmentId, assignment.title, rubricName, rubric.id,
-                        rubricLine, rubricScore, rubric.points_possible,
-                         JSON.stringify(term)
-                    ];
-
-                    row = row.map( item => csvEncode(item));
-                    let row_string = row.join(',') + '\n';
-                    out.push(row_string);
-                }
+                let row = [
+                    term.name, course.course_code, section, user.name, user.sis_user_id, weekNumber,
+                    type, numberInModule, assignment.id, assignment.name, rubric.description, rubric.id,
+                    rubricLine, rubricScore, rubric.points, submission.user.id, submission.user.name,
+                ];
+                console.log(row);
+                row = row.map( item => csvEncode(item));
+                let row_string = row.join(',') + '\n';
+                out.push(row_string);
             }
         }
 
     }
-    console.log(out);
     return out;
 
 }
@@ -338,7 +325,7 @@ defer(function() {
                 let course = await courseResponse.json()
 
                 let assignments = await getAllPagesAsync(`/api/v1/courses/${courseId}/assignments?per_page=100`);
-                let userSubmissions = await getAllPagesAsync(`/api/v1/courses/${courseId}/students/submissions?student_ids=all&per_page=100&include[]=rubric_assessment&include[]=assignment&group=True`);
+                let userSubmissions = await getAllPagesAsync(`/api/v1/courses/${courseId}/students/submissions?student_ids=all&per_page=100&include[]=rubric_assessment&include[]=assignment&include[]=user&grouped=true`);
                 //let quizzes = await getAllPagesAsync(`/api/v1/courses/${courseId}/quizzes`);
 
                 let accounts = await getAllPagesAsync(`/api/v1/accounts/${course.account_id}`);
