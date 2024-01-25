@@ -78,6 +78,9 @@ async function getRemainingPagesAsync(url, listSoFar) {
 
 // escape commas and quotes for CSV formatting
 function csvEncode(string) {
+    if (!string || string in ['undefined', 'null']) {
+        return '';
+    }
     string = String(string);
     if(string) {
         string = string.replace(/(")/g,'"$1');
@@ -91,9 +94,59 @@ function showError(event) {
     window.removeEventListener("error", showError);
 }
 
+function getItemInModule(contentItem, module) {
+    let contentId = contentItem.id;
+    let type= 'Assignment';
+    if( 'discussion_topic' in contentItem.submission_types) {
+        type = 'Discussion'
+    }
+    if( 'Online Quiz' in contentItem.submission_types) {
+        type = 'Quiz'
+    }
 
-function getWeekAndAssignmentNumber(assignment, modules) {
-    let module = modules.filter()
+    let count = 1;
+    for (let item of module.items){
+        if (item.type !== type) {
+            continue;
+        }
+        if(item.content_id === contentId) {
+            item.numberInModule = count;
+            return item;
+        }
+        count++;
+    }
+}
+function getModuleInfo(contentItem, modules) {
+    const regex = /week (\d+)/i;
+    let weekCounter = 0;
+    for (let module of modules) {
+        let match = module.name.match(regex);
+        let weekNumber = Number(match? match[1] : null);
+        if(!weekNumber) {
+            for(let moduleItem in module.items) {
+                if(!moduleItem.hasOwnProperty('title')) {
+                    continue;
+                }
+                let match = moduleItem.title.match(regex);
+                if (match) {
+                    weekNumber = match[1];
+                }
+            }
+        }
+
+        let moduleItem = getItemInModule(contentItem, module);
+        if(!moduleItem) {
+            continue;
+        }
+        let numberInModule = moduleItem.numberInModule;
+        let type = moduleItem.type;
+        return {
+            weekNumber: weekNumber,
+            type: moduleItem.type,
+            numberInModule: moduleItem.numberInModule
+        }
+    }
+    return false;
 }
 
 /**
@@ -161,12 +214,13 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
             }
             console.log(JSON.stringify(term));
             course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
-            let { weekNumber, assignmentNumber } = getWeekAndAssignmentNumber(assignment, modules);
+            let { weekNumber, numberInModule, type } = getModuleInfo(assignment, modules);
+            console.log("number in module", numberInModule);
             let baseEntry = {
-                assignmentNumber,
+                numberInModule,
                 weekNumber,
                 assignmentTotalScore: submission.score,
-                assignmentType: assignment.submission_types,
+                assignmentType: type,
                 assignmentId: assignment.id,
                 attemptNumber: submission.attempt,
                 courseCode: course["course_code"],
@@ -220,8 +274,7 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
                     let { rubric_settings } = assignment;
                     let rubricLine = critIndex;
                     let rubricName = rubric_settings ? rubric_settings.title : null;
-                    let assignmentNumber = 0;
-                    let weekNumber = 0;
+
                     let rubricScore = criterion.points;
 
 //                     let header = [
@@ -232,7 +285,7 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
                     let row = [
                         baseEntry.term.name, baseEntry.courseCode, baseEntry.section, baseEntry.studentName,
                         baseEntry.studentId, baseEntry.weekNumber, baseEntry.assignmentType,
-                        assignmentNumber, baseEntry.assignmentId, assignment.title, rubricName, rubric.id,
+                        baseEntry.numberInModule, baseEntry.assignmentId, assignment.title, rubricName, rubric.id,
                         rubricLine, rubricScore, rubric.points_possible,
                          JSON.stringify(term)
                     ];
@@ -293,7 +346,7 @@ defer(function() {
 
                 let rootAccountId = account.root_account_id;
                 let enrollments = await getAllPagesAsync(`/api/v1/courses/${courseId}/enrollments?per_page=100`);
-                let modules = await getAllPagesAsync(`/api/v1/courses/${courseId}/modules`);
+                let modules = await getAllPagesAsync(`/api/v1/courses/${courseId}/modules?include[]=items&include[]=content_details`);
 
                 let response = await fetch(`/api/v1/accounts/${rootAccountId}/terms/${course.enrollment_term_id}`);
                 let term = await response.json();
