@@ -5,7 +5,7 @@
 // @match        https://*/courses/*/gradebook/speed_grader?*
 // @grant        none
 // @run-at       document-idle
-// @version      0.3
+// @version      0.4
 // ==/UserScript==
 
 /* globals $ */
@@ -14,7 +14,7 @@ const debug = false;
 let header = [
     'Term','Class','Section','Student Name','Student Id',
     'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id', 'Assignment Title',
-    'Rubric Id', 'Rubric Name', 'Rubric Line','Line Score','Line Max Score'
+    'Rubric Id', 'Rubric Line', 'Line Name', 'Line Score','Line Max Score', 'Assignment Score', 'Total Points Possible'
 ].join(',');
 header += '\n';
 
@@ -24,16 +24,6 @@ function defer(method) {
     }
     else {
         setTimeout(async function() { defer(method); }, 100);
-    }
-}
-
-function waitForElement(selector, callback) {
-    if ($(selector).length) {
-        callback();
-    } else {
-        setTimeout(function() {
-            waitForElement(selector, callback);
-        }, 100);
     }
 }
 
@@ -182,35 +172,31 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
         if (section) {
             section = section[1];
         }
-        let { rubric } = assignment;
-        if (!('rubric_settings' in assignment)) {
-            skip = true;
 
+        let rubricCriteria = [];
+        let rubricSettings;
+        if (assignment.hasOwnProperty('rubric')) {
+            rubricCriteria = assignment.rubric;
         }
 
-        if(!assignment.rubric_settings) {
-            skip = true;
-        } else {
-            let rs = assignment.rubric_settings;
-            hide_points = rs.hide_points;
-            free_form_criterion_comments = rs.free_form_criterion_comments;
-            if (hide_points && free_form_criterion_comments) {
-                popUp(`ERROR: ${assignment.name} is configured to use free-form comments instead of ratings AND to hide points`
-                    +`, so there is nothing to export!`);
-                skip = true;
-            }
+        if (assignment.hasOwnProperty('rubric_settings')) {
+            rubricSettings = assignment.rubric_settings;
         }
 
         // Fill out the csv header and map criterion ids to sort index
         // Also create an object that maps criterion ids to an object mapping rating ids to descriptions
         let critOrder = {};
         let critRatingDescs = {};
-        for (let critIndex in rubric){
-            let criterion = rubric[critIndex];
-            critOrder[criterion.id] = critIndex;
-            critRatingDescs[criterion.id] = {};
-            for(let rating of criterion.ratings) {
-                critRatingDescs[criterion.id][rating.id] = rating.description;
+        let critsById = {};
+
+        for (let critIndex in rubricCriteria){
+            let rubricCriterion = rubricCriteria[critIndex];
+            critOrder[rubricCriterion.id] = critIndex;
+            critRatingDescs[rubricCriterion.id] = {};
+            critsById[rubricCriterion.id] = rubricCriterion;
+
+            for(let rating of rubricCriterion.ratings) {
+                critRatingDescs[rubricCriterion.id][rating.id] = rating.description;
             }
         }
 
@@ -222,61 +208,60 @@ async function getEnrollmentRows({ course, enrollment, modules, quizzes, userSub
         if (user) {
             // Add criteria scores and ratings
             // Need to turn rubric_assessment object into an array
-            let crits = []
+            let critAssessments = []
             let critIds = []
-            let { rubric_assessment } = submission;
-            if (rubric_assessment == null) {
+            let { rubric_assessment: rubricAssessment } = submission;
 
-            } else {
-                for (let critKey in rubric_assessment) {
-                    let critValue = rubric_assessment[critKey];
-                    if (free_form_criterion_comments) {
-                        crits.push({'id': critKey, 'points': critValue.points, 'rating': null});
-                    } else {
-                        let crit = {
-                            'id': critKey,
-                            'points': critValue.points,
-                        }
-                        if(critValue.rating_id) {
-                            if(critKey in critRatingDescs) {
-                                crits.rating = critRatingDescs[critKey][critValue.rating_id];
-                            } else {
-                                console.log('critkey not found ', critKey, critRatingDescs)
-                            }
+            if (rubricAssessment !== null) {
+                for (let critKey in rubricAssessment) {
+                    let critValue = rubricAssessment[critKey];
+                    let crit = {
+                        'id': critKey,
+                        'points': critValue.points,
+                        'rating': 'N/A'
+                    }
+                    if(critValue.rating_id) {
+                        if(critKey in critRatingDescs) {
+                            crit.rating = critRatingDescs[critKey][critValue.rating_id];
+                        } else {
+                            console.log('critKey not found ', critKey, critRatingDescs)
                         }
                     }
+                    critAssessments.push(crit);
                     critIds.push(critKey);
                 }
             }
             // Check for any criteria entries that might be missing; set them to null
             for (let critKey in critOrder) {
                 if (!critIds.includes(critKey)) {
-                    crits.push({'id': critKey, 'points': null, 'rating': null});
+                    critAssessments.push({'id': critKey, 'points': 'N/A', 'rating': 'N/A'});
                 }
             }
             // Sort into same order as column order
-            crits.sort(function (a, b) {
+            critAssessments.sort(function (a, b) {
                 return critOrder[a.id] - critOrder[b.id];
             });
 
-            for(let critIndex in crits) {
-                let criterion = crits[critIndex];
+
+            for(let critIndex in critAssessments) {
+                let critAssessment = critAssessments[critIndex];
+                let criterion = critsById[critAssessment.id];
                 let { rubric_settings } = assignment;
                 let rubricLine = critIndex;
                 console.log(assignment);
                 let rubricName = rubric_settings ? rubric_settings.title : null;
-                let name = assignment.hasOwnProperty('name') ? assignment.name : assignment.title;
-                let rubricScore = criterion.points;
-
 // let header = [
 //     'Term','Class','Section','Student Name','Student Id',
-//     'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id',
-//     'Rubric Name', 'Rubric Id', 'Rubric Line','Line Score','Line Max Score'
+//     'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id', 'Assignment Title',
+//     'Rubric Id', 'Rubric Line', 'Line Name', 'Line Score','Line Max Score'
 // ].join(',');
+
+
                 let row = [
-                    term.name, course.course_code, section, user.name, user.sis_user_id, weekNumber,
-                    type, numberInModule, assignment.id, assignment.name, rubric.description, rubric.id,
-                    rubricLine, rubricScore, rubric.points, submission.user.id, submission.user.name,
+                    term.name, course.course_code, section, user.name, user.sis_user_id,
+                    weekNumber, type, numberInModule, assignment.id, assignment.name,
+                    rubricCriteria.id, rubricLine, criterion.description,
+                    critAssessment.points, criterion.points, submission.grade, assignment.points_possible
                 ];
                 console.log(row);
                 row = row.map( item => csvEncode(item));
@@ -298,8 +283,8 @@ defer(function() {
         var a = document.createElement("a");
         document.body.appendChild(a);
         a.style = "display: none";
-        return function (textArray, fileName) {
-            var blob = new Blob(textArray, {type: "text"}),
+        return function (textArray, fileName, type = 'text') {
+            var blob = new Blob(textArray, {type: type}),
                 url = window.URL.createObjectURL(blob);
             a.href = url;
             a.download = fileName;
@@ -351,6 +336,8 @@ defer(function() {
                 popClose();
                 console.log(csvRows);
                 saveText(csvRows, `Rubric Scores ${course.course_code.replace(/[^a-zA-Z 0-9]+/g, '')}.csv`);
+                saveText([JSON.stringify(userSubmissions)], `User Submissions ${course.course_code.replace(/[^a-zA-Z 0-9]+/g, '')}.json`);
+
                 window.removeEventListener("error", showError);
             } catch(e) {
                 popClose();
