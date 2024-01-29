@@ -11,7 +11,7 @@
 /* globals $ */
 // wait until the window jQuery is loaded
 let header = [
-    'Term', 'Instructor', 'Class','Section','Student Name','Student Id',
+    'Term', 'Instructor', 'Class','Section','Student Name','Student Id', 'Enrollment State',
     'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id', 'Assignment Title', 'Submission Status',
     'Rubric Id', 'Rubric Line', 'Line Name', 'Score','Max Score',
 ].join(',');
@@ -117,6 +117,7 @@ async function exportData(singleAssignment=false, saveText) {
         popUp("Exporting scores, please wait...");
         window.addEventListener("error", showError);
 
+
        // Get some initial data from the current URL
         const urlParams = window.location.href.split('?')[1].split('&');
         const courseId = window.location.href.split('/')[4];
@@ -124,16 +125,16 @@ async function exportData(singleAssignment=false, saveText) {
         let courseResponse = await fetch(`/api/v1/courses/${courseId}?include=term`)
         let course = await courseResponse.json()
 
+        let accounts = await getAllPagesAsync(`/api/v1/accounts/${course.account_id}`);
+        let account = accounts[0];
+        let rootAccountId = account.root_account_id;
+
         const assignId = urlParams.find(i => i.split('=')[0] === "assignment_id").split('=')[1];
         let assignRequest = await fetch(`/api/v1/courses/${courseId}/assignments/${assignId}`);
         let assignment = await assignRequest.json();
         let baseSubmissionsUrl = singleAssignment? `/api/v1/courses/${courseId}/assignments/${assignId}/submissions` : `/api/v1/courses/${courseId}/students/submissions`;
         let userSubmissions = await getAllPagesAsync(`${baseSubmissionsUrl}?student_ids=all&per_page=100&include[]=rubric_assessment&include[]=assignment&include[]=user&grouped=true`);
 
-        let accounts = await getAllPagesAsync(`/api/v1/accounts/${course.account_id}`);
-        let account = accounts[0];
-
-        let rootAccountId = account.root_account_id;
         let instructors = await getAllPagesAsync(`/api/v1/courses/${courseId}/users?enrollment_type=teacher`);
         let modules = await getAllPagesAsync(`/api/v1/courses/${courseId}/modules?include[]=items&include[]=content_details`);
         let enrollments = await getAllPagesAsync(`/api/v1/courses/${courseId}/enrollments?per_page=100`);
@@ -230,12 +231,16 @@ async function getRows({
 
     const {course_code} = course;
     let section = course_code.match(/-\s*(\d+)$/);
+    let base_code = course_code.match(/([a-zA-Z]{4}\d{3})/);
     if (section) { section = section[1]; }
+    if (base_code) { base_code = base_code[1]}
 
     let instructorName
 
     if(instructors.length > 1) {
-        instructorName = instructors.map(a => a.name).join(',')
+        instructorName = instructors.map(a => a.name).join(',');
+    } else if(instructors.length === 0) {
+        instructorName = 'No Instructor Found';
     } else {
         instructorName = instructors[0].name;
     }
@@ -263,7 +268,7 @@ async function getRows({
     let baseRow = [
         term.name,
         instructorName,
-        course.course_code,
+        base_code,
         section,
 
     ]
@@ -314,6 +319,7 @@ async function getRows({
             let submissionBaseRow = baseRow.concat([
                 user.name,
                 user.sis_user_id,
+                enrollment.enrollment_state,
                 weekNumber,
                 type,
                 numberInModule,
