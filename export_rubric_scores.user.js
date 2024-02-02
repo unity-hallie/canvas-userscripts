@@ -5,7 +5,7 @@
 // @match        https://*/courses/*/gradebook/speed_grader?*
 // @grant        none
 // @run-at       document-idle
-// @version      0.5.1
+// @version      1.0
 // ==/UserScript==
 
 /* globals $ */
@@ -287,9 +287,8 @@ async function getRows({
         course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
         let { weekNumber, numberInModule, type } = getModuleInfo(assignment, modules);
         let { rubric_assessment: rubricAssessment } = submission;
-        let { rubric_settings } = assignment;
-        let rubricId = typeof(rubric_settings) !== 'undefined' && rubric_settings.hasOwnProperty('id')?
-            rubric_settings.id : 'No Rubric Settings';
+        let rubricId = typeof(rubricSettings) !== 'undefined' && rubricSettings.hasOwnProperty('id')?
+            rubricSettings.id : 'No Rubric Settings';
 
         if (user) {
             // Add criteria scores and ratings
@@ -354,7 +353,7 @@ async function getRows({
 
                 rows.push(submissionBaseRow.concat([
                     criterion.id,
-                    critIndex,
+                    Number(critIndex) + 1,
                     criterion.description,
                     critAssessment.points,
                     criterion.points
