@@ -5,7 +5,7 @@
 // @match        https://*/courses/*/gradebook/speed_grader?*
 // @grant        none
 // @run-at       document-idle
-// @version      1.0
+// @version      1.1
 // ==/UserScript==
 
 /* globals $ */
