@@ -11,114 +11,53 @@
 /* globals $ */
 // wait until the window jQuery is loaded
 let header = [
-    'Term', 'Instructor', 'Class','Section','Student Name','Student Id', 'Enrollment State',
-    'Week Number', 'Assignment Type','Assignment Number', 'Assignment Id', 'Assignment Title', 'Submission Status',
-    'Rubric Id', 'Rubric Line', 'Line Name', 'Score','Max Score',
+    'Term', 'Instructor', 'Class', 'Section', 'Student Name', 'Student Id', 'Enrollment State',
+    'Week Number', 'Module', 'Assignment Type', 'Assignment Number', 'Assignment Id', 'Assignment Title',
+    'Submission Status', 'Rubric Id', 'Rubric Line', 'Line Name', 'Score', 'Max Score',
 ].join(',');
 header += '\n';
 
-function defer(method) {
-    if (typeof $ !== 'undefined') {
-        method();
-    }
-    else {
-        setTimeout(async function() { defer(method); }, 100);
-    }
+
+function main() {
+    'use strict';
+    // utility function for downloading a file
+    let saveText = (function () {
+        let a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style = "display: none";
+        return function (textArray, fileName, type = 'text') {
+            let blob = new Blob(textArray, {type: type}),
+                url = window.URL.createObjectURL(blob);
+            a.href = url;
+            a.download = fileName;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        };
+    }());
+
+    $("body").append($('<div id="export_rubric_dialog" title="Export Rubric Scores"></div>'));
+    // Only add the export button if a rubric is appearing
+    let el = $('#gradebook_header div.statsMetric');
+    el.append('<button type="button" class="Button" id="export_one_rubric_btn">Export Assignment</button>');
+    el.append('<button type="button" class="Button" id="export_all_rubric_btn">Export All</button>');
+
+    $('#export_one_rubric_btn').click(async function () {
+        await exportData(true, saveText);
+    });
+    $('#export_all_rubric_btn').click(async function () {
+        await exportData(false, saveText);
+    });
+
 }
 
-function popUp(text) {
-    let el = $("#export_rubric_dialog");
-    el.html(`<p>${text}</p>`);
-    el.dialog({ buttons: {} });
-}
-
-function popClose() {
-    $("#export_rubric_dialog").dialog("close");
-}
-
-async function getAllPagesAsync(url) {
-    return await getRemainingPagesAsync(url, []);
-
-}
-
-async function getRemainingPagesAsync(url, listSoFar) {
-    let response = await fetch(url);
-    let responseList = await response.json();
-    let headers = response.headers;
-
-    let nextLink;
-    if(headers.has('link')){
-        let linkStr = headers.get('link');
-        let links = linkStr.split(',');
-        nextLink = null;
-        for(let link of links){
-            if (link.split(';')[1].includes('rel="next"')) {
-                nextLink = link.split(';')[0].slice(1, -1);
-            }
-        }
-    }
-    if(nextLink == null) {
-        return listSoFar.concat(responseList);
-    } else {
-        listSoFar = await getRemainingPagesAsync(nextLink, listSoFar);
-        return listSoFar;
-    }
-}
-
-// escape commas and quotes for CSV formatting
-function csvEncode(string) {
-
-    if (typeof(string) === 'undefined' || string === null || string === 'null') {
-        return '';
-    }
-    string = String(string);
-
-    if(string) {
-        string = string.replace(/(")/g,'"$1');
-        string = string.replace(/\s*\n\s*/g,' ');
-    }
-    return `"${string}"`;
-}
-
-function showError(event) {
-    popUp(event.message);
-    window.removeEventListener("error", showError);
-}
-
-function getItemInModule(contentItem, module) {
-    let contentId = contentItem.id;
-    let type= 'Assignment';
-    if( contentItem.hasOwnProperty('discussion_topic')) {
-        type = 'Discussion';
-        contentId = contentItem.discussion_topic.id;
-    }
-    if(contentItem.hasOwnProperty('quiz_id')) {
-        type = 'Quiz';
-        contentId = contentItem.quiz_id;
-    }
-    
-    console.log(type);
-    let count = 1;
-    for (let item of module.items){
-        if (item.type !== type) {
-            continue;
-        }
-        if(item.content_id === contentId) {
-            item.numberInModule = count;
-            return item;
-        }
-        count++;
-    }
-}
-
-async function exportData(singleAssignment=false, saveText) {
+async function exportData(singleAssignment = false, saveText) {
 
     try {
         popUp("Exporting scores, please wait...");
         window.addEventListener("error", showError);
 
 
-       // Get some initial data from the current URL
+        // Get some initial data from the current URL
         const urlParams = window.location.href.split('?')[1].split('&');
         const courseId = window.location.href.split('/')[4];
 
@@ -132,7 +71,8 @@ async function exportData(singleAssignment=false, saveText) {
         const assignId = urlParams.find(i => i.split('=')[0] === "assignment_id").split('=')[1];
         let assignRequest = await fetch(`/api/v1/courses/${courseId}/assignments/${assignId}`);
         let assignment = await assignRequest.json();
-        let baseSubmissionsUrl = singleAssignment? `/api/v1/courses/${courseId}/assignments/${assignId}/submissions` : `/api/v1/courses/${courseId}/students/submissions`;
+        let assignments = await getAllPagesAsync(`/api/v1/courses/${courseId}/assignments`);
+        let baseSubmissionsUrl = singleAssignment ? `/api/v1/courses/${courseId}/assignments/${assignId}/submissions` : `/api/v1/courses/${courseId}/students/submissions`;
         let userSubmissions = await getAllPagesAsync(`${baseSubmissionsUrl}?student_ids=all&per_page=100&include[]=rubric_assessment&include[]=assignment&include[]=user&grouped=true`);
 
         let instructors = await getAllPagesAsync(`/api/v1/courses/${courseId}/users?enrollment_type=teacher`);
@@ -142,59 +82,33 @@ async function exportData(singleAssignment=false, saveText) {
         let response = await fetch(`/api/v1/accounts/${rootAccountId}/terms/${course.enrollment_term_id}`);
         let term = await response.json();
 
+        let assignmentNames = assignments.map(a => a.name);
+        console.log(assignmentNames);
+        console.log(assignments);
+        let assignmentsCollection = new AssignmentsCollection(assignments);
+
         let csvRows = [header];
-        for(let enrollment of enrollments) {
-            let assignmentId = singleAssignment? assignId : null;
+        for (let enrollment of enrollments) {
+            let assignmentId = singleAssignment ? assignId : null;
             let out_rows = await getRows({
-                enrollment, modules, userSubmissions, term, course, assignmentId, instructors,
+                enrollment, modules, userSubmissions, term, course, assignmentId, instructors, assignmentsCollection,
             });
             csvRows = csvRows.concat(out_rows);
         }
         popClose();
         console.log(csvRows);
-        let filename = singleAssignment? assignment.name : course.course_code;
+        let filename = singleAssignment ? assignment.name : course.course_code;
         saveText(csvRows, `Rubric Scores ${filename.replace(/[^a-zA-Z 0-9]+/g, '')}.csv`);
         saveText([JSON.stringify(userSubmissions, null, 2)], `User Submissions ${filename.replace(/[^a-zA-Z 0-9]+/g, '')}.json`);
 
         window.removeEventListener("error", showError);
 
-    } catch(e) {
+    } catch (e) {
         popClose();
         popUp(`ERROR ${e} while retrieving assignment data from Canvas. Please refresh and try again.`, null);
         window.removeEventListener("error", showError);
-        throw(e);
+        throw (e);
     }
-}
-
-function getModuleInfo(contentItem, modules) {
-    const regex = /week (\d+)/i;
-
-    for (let module of modules) {
-        let match = module.name.match(regex);
-        let weekNumber = Number(match? match[1] : null);
-        if(!weekNumber) {
-            for(let moduleItem of module.items) {
-                if(!moduleItem.hasOwnProperty('title')) {
-                    continue;
-                }
-                let match = moduleItem.title.match(regex);
-                if (match) {
-                    weekNumber = match[1];
-                }
-            }
-        }
-
-        let moduleItem = getItemInModule(contentItem, module);
-        if(!moduleItem) {
-            continue;
-        }
-        return {
-            weekNumber: weekNumber,
-            type: moduleItem.type,
-            numberInModule: moduleItem.numberInModule
-        }
-    }
-    return false;
 }
 
 /**
@@ -214,32 +128,37 @@ function getModuleInfo(contentItem, modules) {
  * OR just an array of all users submissions for a single assignment, if assignmentId is specified
  * @param {object} term
  * The term
+ * @param {AssignmentsCollection} assignmentsCollection
+ * The assignmentsCollection for assignments in this course
  * @returns {Promise<string[]>}
  */
-async function getRows({
-        course,
-        enrollment,
-        modules,
-        userSubmissions,
-        instructors,
-        term
-    })
-{
-
-    let { user } = enrollment;
+async function getRows(
+    {
+       course,
+       enrollment,
+       modules,
+       userSubmissions,
+       assignmentsCollection,
+       instructors,
+       term
+   }) {
+    let {user} = enrollment;
     let singleUserSubmissions = userSubmissions.filter(a => a.user_id === user.id);
-
     const {course_code} = course;
     let section = course_code.match(/-\s*(\d+)$/);
     let base_code = course_code.match(/([a-zA-Z]{4}\d{3})/);
-    if (section) { section = section[1]; }
-    if (base_code) { base_code = base_code[1]}
+    if (section) {
+        section = section[1];
+    }
+    if (base_code) {
+        base_code = base_code[1]
+    }
 
     let instructorName
 
-    if(instructors.length > 1) {
+    if (instructors.length > 1) {
         instructorName = instructors.map(a => a.name).join(',');
-    } else if(instructors.length === 0) {
+    } else if (instructors.length === 0) {
         instructorName = 'No Instructor Found';
     } else {
         instructorName = instructors[0].name;
@@ -256,13 +175,6 @@ async function getRows({
     } else {
         submissions = [entry];
     }
-    let assignmentsById = {};
-    for(let submission of submissions) {
-        let  { assignment } = submission;
-        if(!assignment.id in Object.keys(assignmentsById)){
-            assignmentsById[assignment.id] = assignment;
-        }
-    }
 
     const rows = [];
     let baseRow = [
@@ -274,20 +186,18 @@ async function getRows({
     ]
 
     for (let submission of submissions) {
-        let { assignment } = submission;
-
-
+        let {assignment} = submission;
         let rubricSettings;
 
         if (assignment.hasOwnProperty('rubric_settings')) {
             rubricSettings = assignment.rubric_settings;
         }
-        let { critOrder, critRatingDescs, critsById } = getCriteriaInfo(assignment);
+        let {critOrder, critRatingDescs, critsById} = getCriteriaInfo(assignment);
 
         course_code.replace(/^.*_?(\[A-Za-z]{4}\d{3}).*$/, /\1\2/)
-        let { weekNumber, numberInModule, type } = getModuleInfo(assignment, modules);
-        let { rubric_assessment: rubricAssessment } = submission;
-        let rubricId = typeof(rubricSettings) !== 'undefined' && rubricSettings.hasOwnProperty('id')?
+        let {weekNumber, moduleName, numberInModule, type} = getModuleInfo(assignment, modules, assignmentsCollection);
+        let {rubric_assessment: rubricAssessment} = submission;
+        let rubricId = typeof (rubricSettings) !== 'undefined' && rubricSettings.hasOwnProperty('id') ?
             rubricSettings.id : 'No Rubric Settings';
 
         if (user) {
@@ -304,8 +214,8 @@ async function getRows({
                         'points': critValue.points,
                         'rating': null
                     }
-                    if(critValue.rating_id) {
-                        if(critKey in critRatingDescs) {
+                    if (critValue.rating_id) {
+                        if (critKey in critRatingDescs) {
                             crit.rating = critRatingDescs[critKey][critValue.rating_id];
                         } else {
                             console.log('critKey not found ', critKey, critRatingDescs)
@@ -320,6 +230,7 @@ async function getRows({
                 user.sis_user_id,
                 enrollment.enrollment_state,
                 weekNumber,
+                moduleName,
                 type,
                 numberInModule,
                 assignment.id,
@@ -347,7 +258,7 @@ async function getRows({
                 return critOrder[a.id] - critOrder[b.id];
             });
 
-            for(let critIndex in critAssessments) {
+            for (let critIndex in critAssessments) {
                 let critAssessment = critAssessments[critIndex];
                 let criterion = critsById[critAssessment.id];
 
@@ -360,14 +271,104 @@ async function getRows({
                 ]));
             }
         }
-
     }
+
     let out = [];
     for (let row of rows) {
-        let row_string = row.map( item => csvEncode(item)).join(',') + '\n';
+        let row_string = row.map(item => csvEncode(item)).join(',') + '\n';
         out.push(row_string);
     }
     return out;
+}
+
+// escape commas and quotes for CSV formatting
+function csvEncode(string) {
+
+    if (typeof (string) === 'undefined' || string === null || string === 'null') {
+        return '';
+    }
+    string = String(string);
+
+    if (string) {
+        string = string.replace(/(")/g, '"$1');
+        string = string.replace(/\s*\n\s*/g, ' ');
+    }
+    return `"${string}"`;
+}
+
+function showError(event) {
+    popUp(event.message);
+    window.removeEventListener("error", showError);
+}
+
+function getModuleInfo(contentItem, modules, assignmentsById) {
+    const regex = /(week|module) (\d+)/i;
+
+    for (let module of modules) {
+        let match = module.name.match(regex);
+        let weekNumber = !match? null : Number(match[1]);
+        if (!weekNumber) {
+            for (let moduleItem of module.items) {
+                if (!moduleItem.hasOwnProperty('title')) {
+                    continue;
+                }
+                let match = moduleItem.title.match(regex);
+                if (match) {
+                    weekNumber = match[2];
+                }
+            }
+        }
+
+        let moduleItem = getItemInModule(contentItem, module, assignmentsById);
+        if (!moduleItem) {
+            continue;
+        }
+        return {
+            weekNumber: weekNumber == null? '-' : weekNumber,
+            moduleName: module.name,
+            type: moduleItem.type,
+            numberInModule: moduleItem.numberInModule
+        }
+    }
+    return false;
+}
+
+
+function getItemInModule(contentItem, module, assignmentsCollection) {
+    let contentId;
+    let type = assignmentsCollection.getAssignmentContentType(contentItem);
+    if (type === 'Discussion') {
+        contentId = contentItem.discussion_topic.id;
+    } else if (type === 'Quiz') {
+        contentId = contentItem.quiz_id;
+    } else {
+        contentId = contentItem.id;
+    }
+
+    let count = 1;
+    for (let moduleItem of module.items) {
+
+        let moduleItemAssignment = assignmentsCollection.getContentById(moduleItem.content_id);
+
+        if (moduleItem.type !== type){
+          continue;
+        }
+
+        if (moduleItem.content_id === contentId) {
+            if (type === 'Discussion' && !contentItem.hasOwnProperty('rubric')) {
+                moduleItem.numberInModule = '-';
+            } else {
+                moduleItem.numberInModule = count;
+            }
+            return moduleItem;
+        }
+
+        if (type === 'Discussion' && !moduleItemAssignment.hasOwnProperty('rubric')){
+            continue;
+        }
+
+        count++;
+    }
 }
 
 /**
@@ -378,7 +379,7 @@ async function getRows({
  * @returns {{critRatingDescs: *[], critsById: *[], critOrder: *[]}}
  */
 function getCriteriaInfo(assignment) {
-    if (!assignment || !assignment.hasOwnProperty('rubric')){
+    if (!assignment || !assignment.hasOwnProperty('rubric')) {
         return {critsById: [], critRatingDescs: [], critOrder: []}
     }
     let rubricCriteria = assignment.rubric;
@@ -386,47 +387,138 @@ function getCriteriaInfo(assignment) {
     let critOrder = [];
     let critRatingDescs = [];
     let critsById = [];
-        for (let critIndex in rubricCriteria){
+    for (let critIndex in rubricCriteria) {
         let rubricCriterion = rubricCriteria[critIndex];
         critOrder[rubricCriterion.id] = critIndex;
         critRatingDescs[rubricCriterion.id] = {};
         critsById[rubricCriterion.id] = rubricCriterion;
 
-        for(let rating of rubricCriterion.ratings) {
+        for (let rating of rubricCriterion.ratings) {
             critRatingDescs[rubricCriterion.id][rating.id] = rating.description;
         }
     }
-    return { critOrder, critRatingDescs, critsById }
+    return {critOrder, critRatingDescs, critsById}
 }
 
-defer(function() {
-    'use strict';
-    // utility function for downloading a file
-    let saveText = (function () {
-        var a = document.createElement("a");
-        document.body.appendChild(a);
-        a.style = "display: none";
-        return function (textArray, fileName, type = 'text') {
-            var blob = new Blob(textArray, {type: type}),
-                url = window.URL.createObjectURL(blob);
-            a.href = url;
-            a.download = fileName;
-            a.click();
-            window.URL.revokeObjectURL(url);
-        };
-    }());
+function defer(method) {
+    if (typeof $ !== 'undefined') {
+        method();
+    } else {
+        setTimeout(async function () {
+            defer(method);
+        }, 100);
+    }
+}
 
-    $("body").append($('<div id="export_rubric_dialog" title="Export Rubric Scores"></div>'));
-    // Only add the export button if a rubric is appearing
-    let el = $('#gradebook_header div.statsMetric');
-    el.append('<button type="button" class="Button" id="export_one_rubric_btn">Export Assignment</button>');
-    el.append('<button type="button" class="Button" id="export_all_rubric_btn">Export All</button>');
+function popUp(text) {
+    let el = $("#export_rubric_dialog");
+    el.html(`<p>${text}</p>`);
+    el.dialog({buttons: {}});
+}
 
-    $('#export_one_rubric_btn').click(async function() {
-        await exportData(true, saveText);
-    });
-    $('#export_all_rubric_btn').click(async function() {
-        await exportData(false, saveText);
-    });
+function popClose() {
+    $("#export_rubric_dialog").dialog("close");
+}
 
-});
+async function getAllPagesAsync(url) {
+    return await getRemainingPagesAsync(url, []);
+}
+
+async function getRemainingPagesAsync(url, listSoFar) {
+    let response = await fetch(url);
+    let responseList = await response.json();
+    let headers = response.headers;
+
+    let nextLink;
+    if (headers.has('link')) {
+        let linkStr = headers.get('link');
+        let links = linkStr.split(',');
+        nextLink = null;
+        for (let link of links) {
+            if (link.split(';')[1].includes('rel="next"')) {
+                nextLink = link.split(';')[0].slice(1, -1);
+            }
+        }
+    }
+    if (nextLink == null) {
+        return listSoFar.concat(responseList);
+    } else {
+        return await getRemainingPagesAsync(nextLink, listSoFar.concat(responseList));
+    }
+}
+
+/**
+ * A collection of assignments grabbed from the submissions that returns and finds them in various ways
+ */
+class AssignmentsCollection {
+    constructor(assignments) {
+        this.assignments = assignments;
+
+        this.assignmentsById = {}
+        for (let assignment of assignments) {
+            this.assignmentsById[assignment.id] = assignment;
+        }
+
+        let filteredDiscussions =
+        this.discussions = assignments.filter(assignment => assignment.hasOwnProperty('discussion_topic'))
+            .map(function (assignment) {
+                let discussion = assignment.discussion_topic;
+                discussion.assignment = assignment;
+                return discussion;
+            });
+
+        this.discussionsById = {};
+        this.assignmentsByDiscussionId = {};
+        for (let discussion of this.discussions) {
+            this.discussionsById[discussion.id] = discussion;
+            this.assignmentsByDiscussionId[discussion.id] = discussion.assignment;
+
+        }
+
+        this.assignmentsByQuizId = {};
+        for (let assignment of assignments.filter(a => a.hasOwnProperty('quiz_id'))) {
+            this.assignmentsByQuizId[assignment.quiz_id] = assignment;
+        }
+    }
+
+    /**
+     * Gets content by id
+     * @param id the primary id of that content item (not necessarily the assignment Id)
+     * The content_id property that it would have were it in a module
+     * @returns {*}
+     */
+    getContentById(id) {
+        for (let collection of [
+            this.assignmentsByQuizId,
+            this.assignmentsByDiscussionId,
+            this.assignmentsById
+        ]) {
+            if (collection.hasOwnProperty(id)) {
+                return collection[id];
+            }
+        }
+    }
+
+    /**
+     * Returns content type as a string if it is an Assignment, Quiz, or Discussion
+     * @param idOrAssignment
+     * Either the content item or the id of the content item
+     * @returns {string}
+     */
+    getAssignmentContentType(idOrAssignment) {
+        if(idOrAssignment.hasOwnProperty('discussion_topic')) { return 'Discussion'}
+        if(idOrAssignment.hasOwnProperty('quiz_id')) { return 'Quiz'}
+        let id = idOrAssignment.hasOwnProperty('id') ? idOrAssignment.id : idOrAssignment;
+
+        if (this.assignmentsByQuizId.hasOwnProperty(id)) {
+            return "Quiz";
+        } else if (this.assignmentsByDiscussionId.hasOwnProperty(id)) {
+            return 'Discussion';
+        } else {
+            return 'Assignment';
+        }
+    }
+}
+
+
+defer(main);
