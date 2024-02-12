@@ -83,8 +83,6 @@ async function exportData(singleAssignment = false, saveText) {
         let term = await response.json();
 
         let assignmentNames = assignments.map(a => a.name);
-        console.log(assignmentNames);
-        console.log(assignments);
         let assignmentsCollection = new AssignmentsCollection(assignments);
 
         let csvRows = [header];
@@ -96,7 +94,6 @@ async function exportData(singleAssignment = false, saveText) {
             csvRows = csvRows.concat(out_rows);
         }
         popClose();
-        console.log(csvRows);
         let filename = singleAssignment ? assignment.name : course.course_code;
         saveText(csvRows, `Rubric Scores ${filename.replace(/[^a-zA-Z 0-9]+/g, '')}.csv`);
         saveText([JSON.stringify(userSubmissions, null, 2)], `User Submissions ${filename.replace(/[^a-zA-Z 0-9]+/g, '')}.json`);
@@ -335,6 +332,7 @@ function getModuleInfo(contentItem, modules, assignmentsById) {
 
 
 function getItemInModule(contentItem, module, assignmentsCollection) {
+
     let contentId;
     let type = assignmentsCollection.getAssignmentContentType(contentItem);
     if (type === 'Discussion') {
@@ -349,8 +347,7 @@ function getItemInModule(contentItem, module, assignmentsCollection) {
     for (let moduleItem of module.items) {
 
         let moduleItemAssignment = assignmentsCollection.getContentById(moduleItem.content_id);
-
-        if (moduleItem.type !== type){
+        if (assignmentsCollection.getModuleItemType(moduleItem) !== type){
           continue;
         }
 
@@ -360,6 +357,7 @@ function getItemInModule(contentItem, module, assignmentsCollection) {
             } else {
                 moduleItem.numberInModule = count;
             }
+            moduleItem.type = type;
             return moduleItem;
         }
 
@@ -459,7 +457,6 @@ class AssignmentsCollection {
             this.assignmentsById[assignment.id] = assignment;
         }
 
-        let filteredDiscussions =
         this.discussions = assignments.filter(assignment => assignment.hasOwnProperty('discussion_topic'))
             .map(function (assignment) {
                 let discussion = assignment.discussion_topic;
@@ -499,16 +496,21 @@ class AssignmentsCollection {
         }
     }
 
+
+
     /**
      * Returns content type as a string if it is an Assignment, Quiz, or Discussion
-     * @param idOrAssignment
-     * Either the content item or the id of the content item
+     * @param contentItem
+     * the content item
      * @returns {string}
      */
-    getAssignmentContentType(idOrAssignment) {
-        if(idOrAssignment.hasOwnProperty('discussion_topic')) { return 'Discussion'}
-        if(idOrAssignment.hasOwnProperty('quiz_id')) { return 'Quiz'}
-        let id = idOrAssignment.hasOwnProperty('id') ? idOrAssignment.id : idOrAssignment;
+    getAssignmentContentType(contentItem) {
+        if(contentItem.hasOwnProperty('submission_types')) {
+            if (contentItem.submission_types.includes('external_tool')) { return 'External Tool'}
+        }
+        if(contentItem.hasOwnProperty('discussion_topic')) { return 'Discussion'}
+        if(contentItem.hasOwnProperty('quiz_id')) { return 'Quiz'}
+        let id = contentItem.hasOwnProperty('id') ? contentItem.id : contentItem;
 
         if (this.assignmentsByQuizId.hasOwnProperty(id)) {
             return "Quiz";
@@ -517,6 +519,14 @@ class AssignmentsCollection {
         } else {
             return 'Assignment';
         }
+    }
+
+    getModuleItemType(moduleItem) {
+        console.log(moduleItem);
+        if (moduleItem.type !== 'Assignment') return moduleItem.type;
+        const assignment = this.assignmentsById[moduleItem.content_id];
+        console.log(moduleItem, this.getAssignmentContentType(assignment))
+        return this.getAssignmentContentType(assignment);
     }
 }
 
